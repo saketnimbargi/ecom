@@ -1,18 +1,15 @@
 import express, { Application } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { DataSource } from "typeorm";
 import mongoose from "mongoose";
 import { Routes } from "./routes";
-// import { errorHandler } from "./middleware/errorHandler";
-import { dbConfig } from "./config/DbConnection";
-// import { Logger } from "./logger";
+import sequelize, { initializeDatabase } from "./config/DbConnection";
+import { mongoConfig } from "./config/DbConnection";
 
 export class App {
   public app: Application;
   public routes: Routes = new Routes();
   private readonly port: number;
-  private dataSource: DataSource;
 
   constructor() {
     this.app = express();
@@ -20,7 +17,6 @@ export class App {
     this.initializeMiddlewares();
     this.initializeRoutes();
     this.initializeErrorHandling();
-    this.connectToDatabases();
   }
 
   private initializeMiddlewares(): void {
@@ -38,19 +34,26 @@ export class App {
     // this.app.use(errorHandler);
   }
 
-  private async connectToDatabases(): Promise<void> {
+  public async connectToDatabases(): Promise<void> {
     try {
-      // Connect to MySQL using TypeORM DataSource (non-deprecated approach)
-      this.dataSource = new DataSource(dbConfig.mysql);
-      await this.dataSource.initialize();
-      // Logger.info("Connected to MySQL database");
+      // Initialize Sequelize and all models
+      await initializeDatabase();
+      console.info("Connected to MySQL database and initialized models");
 
       // Connect to MongoDB using Mongoose
-      await mongoose.connect(dbConfig.mongodb.uri as string);
-      // Logger.info("Connected to MongoDB database");
+      try {
+        await mongoose.connect(mongoConfig.uri);
+        console.info("Connected to MongoDB database");
+      } catch (mongoError) {
+        console.warn(
+          "Could not connect to MongoDB. Running in MySQL-only mode."
+        );
+        const errMessage = mongoError as unknown as Error;
+        console.warn("MongoDB error:", errMessage.message);
+      }
     } catch (error) {
       console.error("Database connection error:", error);
-      process.exit(1);
+      throw error;
     }
   }
 
@@ -60,8 +63,26 @@ export class App {
     });
   }
 
-  // Method to get the DataSource instance for use in repositories
-  public getDataSource(): DataSource {
-    return this.dataSource;
+  public async close(): Promise<void> {
+    try {
+      // Close Sequelize connection (MySQL)
+      if (sequelize) {
+        await sequelize.close();
+        console.info("MySQL connection closed");
+      }
+
+      // Close Mongoose connection (MongoDB)
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.connection.close();
+        console.info("MongoDB connection closed");
+      }
+
+      // Any other cleanup tasks can go here
+      // For example: closing redis clients, terminating workers, etc.
+
+      console.info("All connections closed successfully");
+    } catch (error) {
+      console.error("Error during application shutdown:", error);
+    }
   }
 }
